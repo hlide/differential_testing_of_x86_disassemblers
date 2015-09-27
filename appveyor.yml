@@ -2,5 +2,6 @@ version: 0.0.{build}
 configuration: Debug
 platform: x86
 build:
+  project: differential_testing_of_x86_disassemblers.sln
   parallel: true
   verbosity: minimal

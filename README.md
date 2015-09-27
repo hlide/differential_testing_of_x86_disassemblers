@@ -1,3 +1,5 @@
+[![Build status](https://ci.appveyor.com/api/projects/status/arm9ps8ccr4f2ktp?svg=true)](https://ci.appveyor.com/project/hlide/differential-testing-of-x86-disassemblers)
+
 # Differential Testing of x86 Disassemblers
 
 x86 Disassemblers translate a stream of machine code into a sequence of assembly instructions which can produce completely unreliable results due to bad decoding of an instruction. This project is about the correctness of the *instruction decoder*, the component of disassemblers that is responsible for the decoding of machine instructions using a *n-version disassembly* methodology based on differential analysis which is specific for Intel x86 architecture. 
