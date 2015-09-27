@@ -22,6 +22,7 @@ int main(int argc, char const *argv[])
     unsigned char source4[] = { 0xB8, 0x00, 0x00 };
     unsigned char source5[] = { 0xB8, 0x00, 0x00, 0x00 };
     unsigned char source6[] = { 0xB8, 0x00, 0x00, 0x00, 0x00 };
+    //unsigned char source7[] = { 0xCC };
 
     decode(source0, sizeof(source0));
     decode(source1, sizeof(source1));
@@ -30,6 +31,7 @@ int main(int argc, char const *argv[])
     decode(source4, sizeof(source4));
     decode(source5, sizeof(source5));
     decode(source6, sizeof(source6));
+    //decode(source7, sizeof(source7));
 
     return 0;
 }

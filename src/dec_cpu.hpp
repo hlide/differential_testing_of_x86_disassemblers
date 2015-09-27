@@ -6,8 +6,6 @@
 #include <cstdio>
 #include <exception>
 
-#include "dec_base.hpp"
-
 namespace dec
 {
     class Cpu
@@ -30,7 +28,8 @@ namespace dec
             }
             else
             {
-                throw std::exception("dec::Cpu: Cannot allocate two virtual pages");
+                fprintf(stderr, "ERROR: cannot allocate two virtual pages\n");
+                throw std::exception("Cannot allocate two virtual pages");
             }
         }
 
@@ -44,6 +43,11 @@ namespace dec
 
         static int Filter(Cpu * that, unsigned int code, PEXCEPTION_POINTERS ep)
         {
+#ifdef _WIN64
+            printf("EXC: @%016X\n", ep->ContextRecord->Rip);
+#else
+            printf("EXC: @%08X\n", ep->ContextRecord->Eip);
+#endif
             switch (code)
             {
             case EXCEPTION_ACCESS_VIOLATION:
@@ -58,7 +62,11 @@ namespace dec
                 that->m_instruction_state = valid;
                 return EXCEPTION_EXECUTE_HANDLER;
             default:
-                printf("code: 0x%08X\n", code);
+#ifdef _WIN64
+                fprintf(stderr, "ERROR: code: 0x%016XULL\n", code);
+#else
+                fprintf(stderr, "ERROR: code: 0x%08X\n", code);
+#endif
                 return EXCEPTION_CONTINUE_SEARCH;
             }
         }
@@ -71,18 +79,44 @@ namespace dec
                 m_instruction_state = invalid;
                 auto target = m_buffer + 0x1000 - length;
                 {
+#ifdef _WIN64
+                    printf("copying %u bytes into [%016X-%016X[\n", length, DWORD64(target), DWORD64(target + length));
+#else
                     printf("copying %u bytes into [%08X-%08X[\n", length, target, target + length);
+#endif
                     memcpy(target, source, length);
-                    CONTEXT context;
+#ifdef _WIN64
+                    // NOT WORKING FOR AMD64...
+                    m_context.ContextFlags = CONTEXT_ALL;
+                    if (0 == ::GetThreadContext(::GetCurrentThread(), &m_context))
                     {
-                        context.ContextFlags = CONTEXT_FULL;
-                        ::GetThreadContext(::GetCurrentThread(), &context);
-                        context.EFlags |= 0x100; // Set trap flag, which raises "single-step" exception
-                        context.Eip = DWORD_PTR(target);
-                        ::SetThreadContext(::GetCurrentThread(), &context);
-                        printf("trick not working!\n");
-                        abort();
+                        auto last_error = ::GetLastError();
+                        fprintf(stderr, "ERROR: GetThreadContext fails with LastError=%u", last_error);
                     }
+                    m_context.EFlags |= 0x100; // Set trap flag, which raises "single-step" exception
+                    m_context.Rip = DWORD64(target);
+                    if (0 == ::SetThreadContext(::GetCurrentThread(), &m_context))
+                    {
+                        auto last_error = ::GetLastError();
+                        fprintf(stderr, "ERROR: SetThreadContext fails with LastError=%u", last_error);
+                    }
+#else
+                    m_context.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER; // minimal flags to get it working
+                    if (0 == ::GetThreadContext(::GetCurrentThread(), &m_context))
+                    {
+                        auto last_error = ::GetLastError();
+                        fprintf(stderr, "ERROR: GetThreadContext fails with LastError=%u", last_error);
+                    }
+                    m_context.EFlags |= 0x100; // Set trap flag, which raises "single-step" exception
+                    m_context.Eip = DWORD(target);
+                    if (0 == ::SetThreadContext(::GetCurrentThread(), &m_context))
+                    {
+                        auto last_error = ::GetLastError();
+                        fprintf(stderr, "ERROR: SetThreadContext fails with LastError=%u", last_error);
+                    }
+#endif
+                    printf("unreachable code unless this trick is not working!\n");
+                    abort();
                 }
             }
             __except (Filter(this, ::_exception_code(), reinterpret_cast<PEXCEPTION_POINTERS>(::_exception_info())))
@@ -99,5 +133,6 @@ namespace dec
         unsigned char * m_buffer;
         size_t m_length;
         InstructionState m_instruction_state;
+        CONTEXT m_context;
     };
 }
