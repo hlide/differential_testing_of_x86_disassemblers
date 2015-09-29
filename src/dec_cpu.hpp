@@ -29,7 +29,7 @@ namespace dec
             else
             {
                 fprintf(stderr, "ERROR: cannot allocate two virtual pages\n");
-                throw std::exception("Cannot allocate two virtual pages");
+                abort();
             }
         }
 
@@ -41,13 +41,10 @@ namespace dec
             }
         }
 
+#ifdef _WIN64
         static int Filter(Cpu * that, unsigned int code, PEXCEPTION_POINTERS ep)
         {
-#ifdef _WIN64
             printf("EXC: @%016X\n", ep->ContextRecord->Rip);
-#else
-            printf("EXC: @%08X\n", ep->ContextRecord->Eip);
-#endif
             switch (code)
             {
             case EXCEPTION_ACCESS_VIOLATION:
@@ -56,36 +53,28 @@ namespace dec
             case EXCEPTION_ILLEGAL_INSTRUCTION:
                 that->m_instruction_state = invalid;
                 return EXCEPTION_EXECUTE_HANDLER;
-            //case EXCEPTION_BREAKPOINT:
+                //case EXCEPTION_BREAKPOINT:
             case EXCEPTION_PRIV_INSTRUCTION:
             case EXCEPTION_SINGLE_STEP:
-                that->m_instruction_state = valid;
+                that->m_length = ep->ContextRecord->Eip -
+                    that->m_instruction_state = valid;
                 return EXCEPTION_EXECUTE_HANDLER;
             default:
-#ifdef _WIN64
                 fprintf(stderr, "ERROR: code: 0x%016XULL\n", code);
-#else
-                fprintf(stderr, "ERROR: code: 0x%08X\n", code);
-#endif
                 return EXCEPTION_CONTINUE_SEARCH;
             }
         }
-        
+
         InstructionState DecodeInstruction(unsigned char const * source, size_t const length)
         {
             __try
             {
                 m_length = 0;
                 m_instruction_state = invalid;
-                auto target = m_buffer + 0x1000 - length;
+                m_target = m_buffer + 0x1000 - length;
                 {
-#ifdef _WIN64
                     printf("copying %u bytes into [%016X-%016X[\n", length, DWORD64(target), DWORD64(target + length));
-#else
-                    printf("copying %u bytes into [%08X-%08X[\n", length, target, target + length);
-#endif
                     memcpy(target, source, length);
-#ifdef _WIN64
                     // NOT WORKING FOR AMD64...
                     m_context.ContextFlags = CONTEXT_ALL;
                     if (0 == ::GetThreadContext(::GetCurrentThread(), &m_context))
@@ -100,21 +89,6 @@ namespace dec
                         auto last_error = ::GetLastError();
                         fprintf(stderr, "ERROR: SetThreadContext fails with LastError=%u", last_error);
                     }
-#else
-                    m_context.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER; // minimal flags to get it working
-                    if (0 == ::GetThreadContext(::GetCurrentThread(), &m_context))
-                    {
-                        auto last_error = ::GetLastError();
-                        fprintf(stderr, "ERROR: GetThreadContext fails with LastError=%u", last_error);
-                    }
-                    m_context.EFlags |= 0x100; // Set trap flag, which raises "single-step" exception
-                    m_context.Eip = DWORD(target);
-                    if (0 == ::SetThreadContext(::GetCurrentThread(), &m_context))
-                    {
-                        auto last_error = ::GetLastError();
-                        fprintf(stderr, "ERROR: SetThreadContext fails with LastError=%u", last_error);
-                    }
-#endif
                     printf("unreachable code unless this trick is not working!\n");
                     abort();
                 }
@@ -129,8 +103,80 @@ namespace dec
 
             return m_instruction_state;
         }
+#else
+        static int Filter(Cpu * that, unsigned int code, PEXCEPTION_POINTERS ep)
+        {
+            switch (code)
+            {
+            case EXCEPTION_ACCESS_VIOLATION:
+                that->m_instruction_state = (ep->ExceptionRecord->ExceptionInformation[1] == ULONG_PTR(that->m_buffer + 0x1000)) ? longer : valid;
+                return EXCEPTION_EXECUTE_HANDLER;
+            case EXCEPTION_DATATYPE_MISALIGNMENT:
+            case EXCEPTION_BREAKPOINT:
+            case EXCEPTION_SINGLE_STEP:
+            case EXCEPTION_ARRAY_BOUNDS_EXCEEDED:
+            case EXCEPTION_FLT_DENORMAL_OPERAND:
+            case EXCEPTION_FLT_DIVIDE_BY_ZERO:
+            case EXCEPTION_FLT_INEXACT_RESULT:
+            case EXCEPTION_FLT_INVALID_OPERATION:
+            case EXCEPTION_FLT_OVERFLOW:
+            case EXCEPTION_FLT_STACK_CHECK:
+            case EXCEPTION_FLT_UNDERFLOW:
+            case EXCEPTION_INT_DIVIDE_BY_ZERO:
+            case EXCEPTION_STACK_OVERFLOW:
+            case EXCEPTION_INVALID_DISPOSITION:
+            case EXCEPTION_PRIV_INSTRUCTION:
+            case EXCEPTION_IN_PAGE_ERROR:
+                that->m_instruction_state = valid;
+                return EXCEPTION_EXECUTE_HANDLER;
+            case EXCEPTION_ILLEGAL_INSTRUCTION:
+                that->m_instruction_state = (*((unsigned short *)ep->ExceptionRecord->ExceptionAddress) == 0x0B0F) ? valid : invalid;
+                return EXCEPTION_EXECUTE_HANDLER;
+            default:
+                fprintf(stderr, "ERROR: code: 0x%08X\n", code);
+                that->m_instruction_state = invalid;
+                return EXCEPTION_CONTINUE_SEARCH;
+            }
+        }
+        
+        InstructionState DecodeInstruction(unsigned char const * source, size_t const length)
+        {
+            m_instruction_state = invalid;
+            for (size_t i = 1; i <= length; ++i)
+            {
+                __try
+                {
+                    m_length = 0;
+                    m_target = m_buffer + 0x1000 - i;
+                    {
+                        memcpy(m_target, source, i);
+                        m_context.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER; // minimal flags to get it working
+                        ::GetThreadContext(::GetCurrentThread(), &m_context);
+                        m_context.EFlags |= 0x100; // Set trap flag, which raises "single-step" exception
+                        m_context.Eip = DWORD(m_target);
+                        ::SetThreadContext(::GetCurrentThread(), &m_context);
+                    }
+                }
+                __except (Filter(this, ::_exception_code(), reinterpret_cast<PEXCEPTION_POINTERS>(::_exception_info())))
+                {
+                    switch (m_instruction_state)
+                    {
+                    case invalid:
+                        break;
+                    case valid:
+                        m_length = i;
+                        break;
+                    case longer:
+                        continue;
+                    }
+                }
+            }
 
+            return m_instruction_state;
+        }
+#endif
         unsigned char * m_buffer;
+        unsigned char * m_target;
         size_t m_length;
         InstructionState m_instruction_state;
         CONTEXT m_context;
